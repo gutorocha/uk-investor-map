@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>UK Investor Heatmaps</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body { margin: 0; padding: 0; font-family: sans-serif; }
+    #map { height: 90vh; width: 100%; }
+    #dropdown-container {
+      padding: 10px;
+      background: #fff;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      border-radius: 4px;
+    }
+    .legend {
+      line-height: 18px;
+      color: #555;
+      background: white;
+      padding: 6px 10px;
+      border-radius: 4px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.2);
+    }
+    .legend i {
+      width: 18px;
+      height: 18px;
+      float: left;
+      margin-right: 8px;
+      opacity: 0.7;
+    }
+    #intro {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(255,255,255,0.9);
+      padding: 10px;
+      max-width: 300px;
+      font-size: 14px;
+      z-index: 1000;
+      border-radius: 4px;
+    }
+    #resetButton {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 8px 12px;
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+  </style>
+</head>
+<body>
+  <div id="dropdown-container">
+    <label for="citySelector">Select City:</label>
+    <select id="citySelector">
+      <option value="London">London</option>
+      <option value="Cambridge">Cambridge</option>
+      <option value="Oxford">Oxford</option>
+      <option value="Edinburgh">Edinburgh</option>
+      <option value="Manchester">Manchester</option>
+      <option value="Bristol">Bristol</option>
+    </select>
+  </div>
+
+  <button id="resetButton">Reset View</button>
+
+  <div id="map"></div>
+
+  <div id="intro">
+    <strong>What this map shows:</strong><br/>
+    This interactive tool visualizes the predicted reduction in probability of securing international investment, based on distance from selected UK cities. Select a city to explore how this probability varies by local authority district.
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([54.5, -3], 6);
+
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const toner = L.tileLayer('https://{s}.tile.stamen.com/toner/{z}/{x}/{y}.png', {
+      attribution: '&copy; Stamen Design'
+    });
+
+    L.control.layers({ "Street Map": osm, "Toner": toner }, null, { collapsed: false }).addTo(map);
+
+    let geojsonLayer = L.geoJSON(null).addTo(map);
+    let legendControl;
+    let cityMarker;
+
+    function getColor(d, min, max) {
+      const colors = ['#FFEDA0', '#FED976', '#FEB24C', '#FD8D3C', '#FC4E2A', '#E31A1C', '#BD0026', '#800026'];
+      const n = colors.length;
+      const scale = (max - min) / n;
+      for (let i = 0; i < n; i++) {
+        if (d <= min + scale * (i + 1)) return colors[i];
+      }
+      return colors[n - 1];
+    }
+
+    function createLegend(min, max) {
+      if (legendControl) map.removeControl(legendControl);
+
+      legendControl = L.control({ position: 'bottomright' });
+      legendControl.onAdd = function () {
+        const div = L.DomUtil.create('div', 'legend');
+        const colors = ['#FFEDA0', '#FED976', '#FEB24C', '#FD8D3C', '#FC4E2A', '#E31A1C', '#BD0026', '#800026'];
+        const n = colors.length;
+        const scale = (max - min) / n;
+
+        div.innerHTML += `<strong>Reduction (%)</strong><br>`;
+        for (let i = 0; i < n; i++) {
+          const from = (min + scale * i).toFixed(1);
+          const to = (min + scale * (i + 1)).toFixed(1);
+          div.innerHTML += `<i style="background:${colors[i]}"></i> ${from}&ndash;${to}<br>`;
+        }
+        return div;
+      };
+      legendControl.addTo(map);
+    }
+
+    const cityCoords = {
+      London: [51.5074, -0.1278],
+      Cambridge: [52.2053, 0.1218],
+      Oxford: [51.7520, -1.2577],
+      Edinburgh: [55.9533, -3.1883],
+      Manchester: [53.4808, -2.2426],
+      Bristol: [51.4545, -2.5879]
+    };
+
+    function loadCityGeoJSON(city) {
+      const geojsonPath = new URL(`geojson/${city}.geojson`, window.location.href);
+      fetch(geojsonPath)
+        .then(res => {
+          if (!res.ok) throw new Error(`Failed to load: ${city}`);
+          return res.json();
+        })
+        .then(data => {
+          geojsonLayer.clearLayers();
+          if (cityMarker) map.removeLayer(cityMarker);
+
+          const values = data.features.map(f => f.properties.value);
+          const min = Math.min(...values);
+          const max = Math.max(...values);
+
+          geojsonLayer = L.geoJSON(data, {
+            style: feature => ({
+              fillColor: getColor(feature.properties.value, min, max),
+              weight: 0.5,
+              color: '#555',
+              fillOpacity: 0.7
+            }),
+            onEachFeature: (feature, layer) => {
+              const name = feature.properties.LAD23NM;
+              const value = feature.properties.value;
+              layer.bindTooltip(`<strong>${name}</strong><br/>Reduction: ${value}%`);
+            }
+          }).addTo(map);
+
+          createLegend(min, max);
+
+          const [lat, lon] = cityCoords[city];
+          cityMarker = L.marker([lat, lon], { icon: L.divIcon({ className: 'city-marker', html: '★', iconSize: [20, 20] }) })
+            .addTo(map)
+            .bindPopup(`${city} – Origin City`)
+            .openPopup();
+
+          map.fitBounds(geojsonLayer.getBounds());
+        })
+        .catch(err => {
+          console.error(err);
+          alert(`Could not load map for ${city}. Please ensure the file exists in /geojson/.`);
+        });
+    }
+
+    document.getElementById('citySelector').addEventListener('change', function () {
+      const city = this.value;
+      loadCityGeoJSON(city);
+    });
+
+    document.getElementById('resetButton').addEventListener('click', function () {
+      map.setView([54.5, -3], 6);
+    });
+
+    loadCityGeoJSON('London');
+  </script>
+</body>
+</html>
